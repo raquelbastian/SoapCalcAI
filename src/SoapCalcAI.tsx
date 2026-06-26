@@ -18,7 +18,7 @@ type AIStatus  = "idle"|"loading"|"success"|"error";
 type SoapType  = "solid"|"liquid";
 type WaterMode = "ratio"|"lye_pct"|"oil_pct";
 type FragMode  = "oil_pct"|"g_per_kg";
-type ThemeMode = "dark"|"light";
+export type ThemeMode = "dark"|"light";
 
 interface OilEntry { id:string; oil:OilName; weight:number; pct:number; }
 interface AdditivePreset { name:string; emoji:string; unit:"g"|"tsp"|"tbsp"|"ml"|"pct_oil"; addAt:"liquid"|"fats"|"trace"; naohFactor:number; note:string; }
@@ -27,7 +27,15 @@ interface LiquidPreset { name:string; emoji:string; note:string; }
 interface CustomLiquid { id:string; name:string; pct:number; }
 interface Fragrance { id:string; name:string; amount:number; mode:FragMode; }
 interface AIOilBlend { name:OilName; pct:number; }
-interface AIRecipe { recipeName:string; oils:AIOilBlend[]; superfat:number; batchGrams:number; rationale:string; additives:string[]; }
+interface AIRecipe {
+  recipeName:string; oils:AIOilBlend[]; superfat:number; batchGrams:number; rationale:string;
+  additives?:{name:string;amount:number;unit:string;addAt:string}[];
+  fragrances?:{name:string;amount:number}[];
+  fragPct?:number;
+  customLiquids?:{name:string;pct:number}[];
+  waterRatio?:number;
+  dilutionRatio?:number;
+}
 interface BlendScores { bubblyLather:number; creamyLather:number; cleansing:number; condition:number; hardness:number; longevity:number; iodine:number; ins:number; }
 interface FattyAcids  { lauric:number; myristic:number; palmitic:number; stearic:number; ricinoleic:number; oleic:number; linoleic:number; linolenic:number; }
 
@@ -35,6 +43,7 @@ interface SoapCalcAIProps {
   onViewPricing?:()=>void; onViewRecipes?:()=>void; onViewBatches?:()=>void;
   authToken?:string; currentUser?:{name:string;email:string;plan:"free"|"premium"};
   onLogout?:()=>void; loadedRecipe?:Recipe|null; onRecipeLoaded?:()=>void;
+  theme?:ThemeMode; onThemeChange?:(t:ThemeMode)=>void;
 }
 
 // ── Oil DB ────────────────────────────────────────────────────────────────────
@@ -67,6 +76,11 @@ const ADDITIVE_PRESETS:AdditivePreset[]=[
   {name:"Beeswax",            emoji:"🐝",unit:"pct_oil",addAt:"fats",  naohFactor:0,   note:"1–3% hardens bar"},
   {name:"Shea Butter",        emoji:"🌰",unit:"pct_oil",addAt:"fats",  naohFactor:0,   note:"Add at trace for conditioning"},
   {name:"Vinegar",            emoji:"🍾",unit:"pct_oil",addAt:"fats",  naohFactor:0,   note:"3% of oils, add with fats"},
+  {name:"Fine Sea Salt",      emoji:"🧂",unit:"pct_oil",addAt:"trace", naohFactor:0,   note:"50–100% of oil weight for salt bars"},
+  {name:"Pink Himalayan Salt",emoji:"🩷",unit:"pct_oil",addAt:"trace", naohFactor:0,   note:"50–100% of oil weight, mineral-rich"},
+  {name:"Colloidal Oatmeal",  emoji:"🥣",unit:"pct_oil",addAt:"trace", naohFactor:0,   note:"1–3%, soothing for eczema"},
+  {name:"Zinc Oxide",         emoji:"⬜",unit:"pct_oil",addAt:"trace", naohFactor:0,   note:"1–2%, calming, whitens soap"},
+  {name:"Silk Fibers",        emoji:"🪡",unit:"g",      addAt:"liquid",naohFactor:0,   note:"1–2g dissolved in lye, silky feel"},
 ];
 
 const LIQUID_PRESETS:LiquidPreset[]=[
@@ -82,7 +96,7 @@ const LIQUID_PRESETS:LiquidPreset[]=[
 ];
 
 // ── Theme tokens ──────────────────────────────────────────────────────────────
-const DARK = {
+export const DARK = {
   bg:         "#0A0908",
   surface:    "#141210",
   surface2:   "#1C1A17",
@@ -100,7 +114,7 @@ const DARK = {
   inputBg:    "#0F0D0B",
   scoreBg:    "#1C1A17",
 };
-const LIGHT = {
+export const LIGHT = {
   bg:         "#F5F3EF",
   surface:    "#FFFFFF",
   surface2:   "#F0EDE8",
@@ -183,9 +197,9 @@ const Step:FC<{n:number;title:string;children:ReactNode;T:typeof DARK;accent?:st
 };
 
 // ── OilPanel — left/right picker (Option B) ───────────────────────────────────
-const OilPanel:FC<{oils:OilEntry[];mode:InputMode;batchGrams:number;batchUnit:BatchUnit;effOilG:number;pctTotal:number;aiHighlight:boolean;T:typeof DARK;oilInputMode:"pct"|"g"|"unit";onOilInputModeChange:(m:"pct"|"g"|"unit")=>void;
+const OilPanel:FC<{oils:OilEntry[];mode:InputMode;batchGrams:number;batchUnit:BatchUnit;effOilG:number;pctTotal:number;aiHighlight:boolean;T:typeof DARK;ac:string;oilInputMode:"pct"|"g"|"unit";onOilInputModeChange:(m:"pct"|"g"|"unit")=>void;
   onAdd:(name:OilName)=>void;onRemove:(id:string)=>void;onChange:(id:string,f:keyof OilEntry,v:string)=>void;onReorder:(from:number,to:number)=>void;}>=
-  ({oils,mode,batchGrams,batchUnit,effOilG,pctTotal,aiHighlight,T,oilInputMode,onOilInputModeChange,onAdd,onRemove,onChange,onReorder})=>{
+  ({oils,mode,batchGrams,batchUnit,effOilG,pctTotal,aiHighlight,T,ac,oilInputMode,onOilInputModeChange,onAdd,onRemove,onChange,onReorder})=>{
 
   const [search,setSearch]=useState("");
   const selectedNames=oils.map(o=>o.oil);
@@ -454,10 +468,37 @@ const ToggleSwitch:FC<{value:boolean;onChange:(v:boolean)=>void;label:string;T:t
 );
 
 // ── AI Box ────────────────────────────────────────────────────────────────────
-const SP=["Highly conditioning bar with yogurt and papaya extract","Energizing citrus bar with strong lather","Gentle baby soap fragrance-free and extra mild"];
-const LP=["Moisturizing liquid soap with aloe vera","Foaming kitchen soap that cuts grease","Luxurious body wash with silky feel"];
-const SS=`You are SoapCalcAI, cold-process SOLID SOAP (NaOH) expert. Available oils: Olive(0.134), Coconut(0.190), Castor(0.128 max 10%), Palm(0.141), Canola(0.124), RiceBran(0.128), CocoaButter(0.137 max 15%). Percentages sum to 100, superfat 2-15%. Output ONLY valid JSON: {"recipeName":"...","oils":[{"name":"Olive","pct":50}],"superfat":7,"batchGrams":1000,"rationale":"2-3 sentences.","additives":["item"]}`;
-const LS=`You are SoapCalcAI, cold-process LIQUID SOAP (KOH) expert. Oils: Olive, Coconut(max 30%), Castor(max 5%), Canola, RiceBran. Percentages sum to 100, superfat 0-3%. Output ONLY valid JSON: {"recipeName":"...","oils":[{"name":"Olive","pct":70}],"superfat":2,"batchGrams":1000,"dilutionRatio":2.5,"rationale":"...","additives":["item"]}`;
+const SP=["Salt bar with activated charcoal for detox","Conditioning bar with goat's milk and honey swirl","Gentle unscented baby soap extra mild","Coffee kitchen soap that cuts grease","Luxurious rose clay facial bar"];
+const LP=["Moisturizing liquid soap with aloe vera","Foaming kitchen soap with lemon","Luxurious body wash with silky lather"];
+const AI_OILS=`Available oils (use EXACT name): Olive, Coconut, Castor(max 10%), Palm, Canola, RiceBran, CocoaButter(max 15%), Shea(max 15%), Avocado, Lard`;
+const AI_ADDITIVES=`Available additives (use EXACT name): Citric Acid(unit:g,addAt:liquid), Sodium Lactate(unit:tsp,addAt:liquid), Kaolin Clay(unit:pct_oil,addAt:fats), Activated Charcoal(unit:pct_oil,addAt:trace,0.5-2%), Cocoa Powder(unit:pct_oil,addAt:trace,1-3%), Turmeric Powder(unit:pct_oil,addAt:trace,0.5-1%), Honey(unit:pct_oil,addAt:trace), Yogurt(unit:pct_oil,addAt:trace), Papaya Extract(unit:g,addAt:trace), Oatmeal(unit:pct_oil,addAt:trace), Beeswax(unit:pct_oil,addAt:fats,1-3%), Fine Sea Salt(unit:pct_oil,addAt:trace,50-100% for salt bars), Pink Himalayan Salt(unit:pct_oil,addAt:trace,50-100%), Colloidal Oatmeal(unit:pct_oil,addAt:trace,1-3%), Zinc Oxide(unit:pct_oil,addAt:trace,1-2%), Silk Fibers(unit:g,addAt:liquid,1-2g)`;
+const AI_LIQUIDS=`Available custom liquids: Distilled Water, Goat's Milk, Coconut Milk, Aloe Vera Juice, Beer, Coffee, Green Tea, Rose Water, Buttermilk`;
+const AI_JSON=`Output ONLY valid JSON (no markdown):
+{
+  "recipeName":"...",
+  "oils":[{"name":"Olive","pct":50}],
+  "superfat":5,
+  "batchGrams":1000,
+  "waterRatio":2.5,
+  "additives":[{"name":"Activated Charcoal","amount":1,"unit":"pct_oil","addAt":"trace"}],
+  "fragrances":[{"name":"Tea Tree EO","amount":15}],
+  "fragPct":3,
+  "customLiquids":[{"name":"Distilled Water","pct":100}],
+  "rationale":"2-3 sentences explaining why this blend works."
+}`;
+const SS=`You are SoapCalcAI, expert cold-process SOLID SOAP (NaOH) formulator.
+${AI_OILS}. ${AI_ADDITIVES}. ${AI_LIQUIDS}.
+RULES:
+- Oil percentages MUST sum to exactly 100. Use ONLY oil names from the available list.
+- Superfat: 5-8% normal, 15-20% for salt bars only.
+- waterRatio: water:lye ratio. Default 2.5. Salt bars: 1.5-1.8. Swirl: 2.8-3.0. Milk soaps: 2.0-2.3.
+- Include additives/fragrances/customLiquids when the user's request implies them.
+- fragPct: fragrance as % of oil weight (3-5% typical).
+SALT BAR rules: MUST include "Fine Sea Salt" or "Pink Himalayan Salt" at 50-100 pct_oil as additive. Use 75-80% Coconut, 15-20% superfat, waterRatio 1.5-1.8. Salt bars without salt aren't salt bars.
+MILK SOAP rules: Put the milk in customLiquids (e.g. Goat's Milk 50%, Distilled Water 50%), not in additives.
+SWIRL rules: Higher waterRatio (2.8-3.0) for thinner batter. Suggest colorant additives.
+${AI_JSON}`;
+const LS=`You are SoapCalcAI, expert cold-process LIQUID SOAP (KOH) formulator. ${AI_OILS}. ${AI_ADDITIVES}. ${AI_LIQUIDS}. Oil percentages must sum to 100. Superfat 0-3%. Also include "dilutionRatio" (default 2.5). ${AI_JSON}`;
 
 const AIBox:FC<{soapType:SoapType;onApply:(r:AIRecipe)=>void;isApplied:boolean;onClear:()=>void;authToken?:string;aiUsage:number;aiLimit:number|null;T:typeof DARK}>=
   ({soapType,onApply,isApplied,onClear,authToken,aiUsage,aiLimit,T})=>{
@@ -548,8 +589,8 @@ const AIBox:FC<{soapType:SoapType;onApply:(r:AIRecipe)=>void;isApplied:boolean;o
 // ══════════════════════════════════════════════════════════════════════════════
 // MAIN
 // ══════════════════════════════════════════════════════════════════════════════
-export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,authToken,currentUser,onLogout,loadedRecipe,onRecipeLoaded}:SoapCalcAIProps={}):JSX.Element{
-  const [theme,setTheme]         = useState<ThemeMode>("dark");
+export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,authToken,currentUser,onLogout,loadedRecipe,onRecipeLoaded,theme="light",onThemeChange}:SoapCalcAIProps={}){
+  const setTheme=(t:ThemeMode)=>onThemeChange?.(t);
   const T                        = theme==="dark"?DARK:LIGHT;
 
   const [soapType,setSoapType]   = useState<SoapType>("solid");
@@ -610,6 +651,11 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
       setFragrances(lr.fragrances.map((f:any)=>({id:gid(),name:f.name||"",amount:f.amount||0,mode:f.mode||"oil_pct"})));
     else setFragrances([]);
     setNotes(lr.notes||"");
+    if(lr.fragPct) setFragPct(lr.fragPct);
+    if(lr.fragMode) setFragMode(lr.fragMode);
+    if(Array.isArray(lr.customLiquids)&&lr.customLiquids.length>0)
+      setCustomLiquids(lr.customLiquids.map((l:any)=>({id:gid(),name:l.name||"Distilled Water",pct:l.pct??100})));
+    else setCustomLiquids([{id:gid(),name:"Distilled Water",pct:100}]);
     setAiApplied(false);setAiRecipeName(loadedRecipe.name);
     setRecipeId(loadedRecipe._id);setRName(loadedRecipe.name);
     onRecipeLoaded?.();
@@ -696,7 +742,7 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
   const addAdditive=(name:string)=>{if(additives.find(a=>a.name===name))return;const p=ADDITIVE_PRESETS.find(x=>x.name===name);setAdditives(prev=>[...prev,{id:gid(),name,amount:p?.unit==="pct_oil"?1:10,unit:p?.unit??"g",addAt:p?.addAt??"trace",naohFactor:p?.naohFactor??0,liquidDiscount:false}]);};
   const remAdditive=(name:string)=>setAdditives(p=>p.filter(a=>a.name!==name));
   const updAdditive=(id:string,field:keyof Additive,value:any)=>setAdditives(p=>p.map(a=>a.id!==id?a:{...a,[field]:value}));
-  const addLiquid=(name:string)=>{if(customLiquids.find(l=>l.name===name))return;const total=customLiquids.reduce((s,l)=>s+l.pct,0);setCustomLiquids(p=>[...p,{id:gid(),name,pct:Math.max(0,100-total)}]);};
+  const addLiquid=(name:string)=>{if(customLiquids.find(l=>l.name===name))return;const share=10;setCustomLiquids(p=>{const first=p[0];if(!first)return[{id:gid(),name,pct:100}];const reduced=p.map((l,i)=>i===0?{...l,pct:Math.max(0,l.pct-share)}:l);return[...reduced,{id:gid(),name,pct:share}];});};
   const remLiquid=(name:string)=>setCustomLiquids(p=>p.filter(l=>l.name!==name));
 
   const handleNew=useCallback(()=>{
@@ -707,16 +753,37 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
     setUpdating(true);
     try{
       const r=await fetch(`http://localhost:3001/recipes/${currentRecipeId}`,{method:"PUT",headers:{Authorization:`Bearer ${authToken}`,"Content-Type":"application/json"},
-        body:JSON.stringify({soapType,batchGrams:effOilG,oils:oilBreakdown.map(o=>({name:o.oil,pct:parseFloat(o.dp),grams:o.grams})),superfat,naohWeight:lyeWeight,waterAmount,lyePurity,scores,additives:additives.map(a=>({name:a.name,amount:a.amount,unit:a.unit,addAt:a.addAt,naohFactor:a.naohFactor})),fragrances:fragrances.map(f=>({name:f.name,amount:f.amount,mode:f.mode})),notes,updatedAt:new Date()})});
+        body:JSON.stringify({soapType,batchGrams:effOilG,oils:oilBreakdown.map(o=>({name:o.oil,pct:parseFloat(o.dp),grams:o.grams})),superfat,naohWeight:lyeWeight,waterAmount,lyePurity,scores,additives:additives.map(a=>({name:a.name,amount:a.amount,unit:a.unit,addAt:a.addAt,naohFactor:a.naohFactor})),fragrances:fragrances.map(f=>({name:f.name,amount:f.amount,mode:f.mode})),fragPct,fragMode,fragWeight,customLiquids:customLiquids.map(l=>({name:l.name,pct:l.pct})),notes,updatedAt:new Date()})});
       if(r.ok){setSaveSuccess(`✓ "${currentRecipeName}" updated!`);setTimeout(()=>setSaveSuccess(""),3000);}
     }catch{setSaveSuccess("Update failed.");setTimeout(()=>setSaveSuccess(""),2000);}
     finally{setUpdating(false);}
   };
 
   const applyAI=useCallback((recipe:AIRecipe)=>{
-    setBlendAnalysis("");setInputMode("pct");setOils(recipe.oils.map(o=>({id:gid(),oil:o.name,weight:Math.round((o.pct/100)*batchGrams),pct:o.pct})));setSuperfat(recipe.superfat);if(recipe.batchGrams){setBatch(recipe.batchGrams);setBatchUnit("g");}if((recipe as any).dilutionRatio)setDilution((recipe as any).dilutionRatio);setAiApplied(true);setAiRecipeName(recipe.recipeName??"");setRecipeId(null);setRName("");setAiUsage(u=>u+1);},[batchGrams]);
+    setBlendAnalysis("");setInputMode("pct");
+    const bg=recipe.batchGrams||batchGrams;
+    setOils(recipe.oils.map(o=>({id:gid(),oil:o.name,weight:Math.round((o.pct/100)*bg),pct:o.pct})));
+    setSuperfat(recipe.superfat);
+    if(recipe.batchGrams){setBatch(recipe.batchGrams);setBatchUnit("g");}
+    if(recipe.dilutionRatio)setDilution(recipe.dilutionRatio);
+    if(recipe.waterRatio){setWaterMode("ratio");setWaterRatio(recipe.waterRatio);}
+    if(Array.isArray(recipe.additives)&&recipe.additives.length>0){
+      setAdditives(recipe.additives.map(a=>{
+        const p=ADDITIVE_PRESETS.find(x=>x.name===a.name);
+        return{id:gid(),name:a.name,amount:a.amount||0,unit:(a.unit||p?.unit||"g") as any,addAt:(a.addAt||p?.addAt||"trace") as any,naohFactor:p?.naohFactor??0,liquidDiscount:false};
+      }));
+    }
+    if(Array.isArray(recipe.fragrances)&&recipe.fragrances.length>0){
+      setFragrances(recipe.fragrances.map(f=>({id:gid(),name:f.name||"",amount:f.amount||0,mode:"oil_pct" as FragMode})));
+    }
+    if(recipe.fragPct)setFragPct(recipe.fragPct);
+    if(Array.isArray(recipe.customLiquids)&&recipe.customLiquids.length>0){
+      setCustomLiquids(recipe.customLiquids.map(l=>({id:gid(),name:l.name,pct:l.pct})));
+    }
+    setAiApplied(true);setAiRecipeName(recipe.recipeName??"");setRecipeId(null);setRName("");setAiUsage(u=>u+1);
+  },[batchGrams]);
 
-  const buildPDF=()=>({name:currentRecipeName||aiRecipeName||"My Soap Recipe",description:notes,authorName:currentUser?.name??"Artisan",soapType,batchGrams:effOilG,oils:oilBreakdown.map(o=>({name:o.oil,pct:parseFloat(o.dp),grams:o.grams})),superfat,naohWeight:lyeWeight,waterAmount,lyePurity,dilutionRatio:isLiquid?dilutionRatio:undefined,scores,fa,additives:additives.map(a=>({name:a.name,amount:a.amount,unit:a.unit,addAt:a.addAt})),aiGenerated:aiApplied,tags:[]});
+  const buildPDF=()=>({name:currentRecipeName||aiRecipeName||"My Soap Recipe",description:notes,authorName:currentUser?.name??"Artisan",soapType,batchGrams:effOilG,batchUnit,oils:oilBreakdown.map(o=>({name:o.oil,pct:parseFloat(o.dp),grams:o.grams})),superfat,naohWeight:lyeWeight,waterAmount,lyePurity,dilutionRatio:isLiquid?dilutionRatio:undefined,scores,fa,additives:additives.map(a=>({name:a.name,amount:a.amount,unit:a.unit,addAt:a.addAt})),fragrances:fragrances.map(f=>({name:f.name,amount:f.amount})),fragWeight,customLiquids:customLiquids.map(l=>({name:l.name,pct:l.pct})),notes,aiGenerated:aiApplied,tags:[]});
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -767,7 +834,7 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
         {/* Right: theme + user */}
         <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
           {/* Theme toggle */}
-          <button onClick={()=>setTheme(t=>t==="dark"?"light":"dark")}
+          <button onClick={()=>setTheme(theme==="dark"?"light":"dark")}
             style={{width:32,height:32,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface2,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:T.textMuted}}>
             {theme==="dark"?<SunIcon/>:<MoonIcon/>}
           </button>
@@ -854,7 +921,7 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
           {/* Step 2 — Oils */}
           <Step n={2} title="Recipe Oils & Fats" T={T} accent={ac}>
 
-            <OilPanel oils={oils} mode={inputMode} batchGrams={batchGrams} batchUnit={batchUnit} effOilG={effOilG} pctTotal={pctTotal} oilInputMode={oilInputMode} onOilInputModeChange={setOilInputMode}
+            <OilPanel oils={oils} mode={inputMode} batchGrams={batchGrams} batchUnit={batchUnit} effOilG={effOilG} pctTotal={pctTotal} ac={ac} oilInputMode={oilInputMode} onOilInputModeChange={setOilInputMode}
               aiHighlight={aiApplied} T={T}
               onAdd={(name)=>{if(!oils.find(o=>o.oil===name))setOils(p=>[...p,{id:gid(),oil:name,weight:50,pct:5}]);}}
               onRemove={remOil}
@@ -1070,12 +1137,12 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
                           <span style={{fontSize:12,fontWeight:600,color:T.text}}>{p?.emoji} {liq.name}</span>
                           <button onClick={()=>remLiquid(liq.name)} style={{background:"none",border:"none",cursor:"pointer",color:T.textDim}}><XIcon/></button>
                         </div>
-                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
                           <input type="number" min="0" max="100" value={liq.pct}
                             onChange={(e:ChangeEvent<HTMLInputElement>)=>setCustomLiquids(prev=>prev.map(l=>l.id!==liq.id?l:{...l,pct:parseFloat(e.target.value)||0}))}
-                            style={{width:50,background:T.inputBg,border:`1px solid ${T.border}`,borderRadius:5,padding:"3px 6px",color:ac,fontSize:12,fontWeight:600,outline:"none",textAlign:"right"}}/>
-                          <span style={{fontSize:11,color:T.textMuted}}>%</span>
-                          <span style={{fontSize:10,color:T.textDim,marginLeft:"auto"}}>{(waterAmount*(liq.pct/100)).toFixed(1)}g</span>
+                            style={{width:64,background:T.inputBg,border:`1px solid ${T.border}`,borderRadius:6,padding:"6px 8px",color:ac,fontSize:15,fontWeight:700,outline:"none",textAlign:"right"}}/>
+                          <span style={{fontSize:13,color:T.textMuted,fontWeight:500}}>%</span>
+                          <span style={{fontSize:14,color:T.text,fontWeight:600,marginLeft:"auto"}}>{(waterAmount*(liq.pct/100)).toFixed(1)}g</span>
                         </div>
                         {p?.note&&<p style={{fontSize:10,color:T.textDim,marginTop:4}}>💡 {p.note}</p>}
                       </div>
@@ -1088,7 +1155,7 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
 
           {/* Step 5 — Additives */}
           <Step n={6} title="Custom Additives" T={T} accent={ac} defaultOpen={false}>
-            {citricExtra>0&&<div style={{padding:"8px 10px",borderRadius:6,background:"#1A1A08",border:"1px solid #5A5A20",color:"#C0C040",fontSize:11,marginBottom:8}}>
+            {citricExtra>0&&<div style={{padding:"8px 10px",borderRadius:6,background:ac+"11",border:`1px solid ${ac+"44"}`,color:ac,fontSize:11,marginBottom:8}}>
               🍋 Citric acid adds <strong>{citricExtra.toFixed(2)}g</strong> extra NaOH → Total: <strong>{lyeWeight.toFixed(2)}g</strong>
             </div>}
             <LRPanel T={T} available={ADDITIVE_PRESETS} selected={additives.map(a=>a.name)}
@@ -1098,12 +1165,12 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
                   {additives.map(a=>{
                     const p=ADDITIVE_PRESETS.find(x=>x.name===a.name);
                     return (
-                      <div key={a.id} style={{padding:"10px",borderRadius:8,background:a.naohFactor>0?"#141408":T.surface2,border:`1px solid ${a.naohFactor>0?"#5A5A20":T.border}`,marginBottom:6}}>
+                      <div key={a.id} style={{padding:"10px",borderRadius:8,background:T.surface2,border:`1px solid ${T.border}`,marginBottom:6}}>
                         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-                          <span style={{fontSize:12,fontWeight:600,color:a.naohFactor>0?"#C0C040":T.text}}>{p?.emoji} {a.name}</span>
+                          <span style={{fontSize:12,fontWeight:600,color:T.text}}>{p?.emoji} {a.name}</span>
                           <button onClick={()=>remAdditive(a.name)} style={{background:"none",border:"none",cursor:"pointer",color:T.textDim}}><XIcon/></button>
                         </div>
-                        <div style={{display:"flex",gap:6,marginBottom:4}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
                           <input type="number" min="0" step="0.1" value={a.amount} onChange={(e:ChangeEvent<HTMLInputElement>)=>updAdditive(a.id,"amount",parseFloat(e.target.value)||0)}
                             style={{width:50,background:T.inputBg,border:`1px solid ${T.border}`,borderRadius:5,padding:"3px 6px",color:ac,fontSize:12,fontWeight:600,outline:"none",textAlign:"right"}}/>
                           <select value={a.unit} onChange={(e:ChangeEvent<HTMLSelectElement>)=>updAdditive(a.id,"unit",e.target.value)}
@@ -1114,9 +1181,9 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
                             style={{fontSize:11,background:T.inputBg,border:`1px solid ${T.border}`,borderRadius:5,padding:"3px 6px",color:T.textMuted,outline:"none"}}>
                             <option value="liquid">w/ Liquid</option><option value="fats">w/ Fats</option><option value="trace">At Trace</option>
                           </select>
+                          <span style={{fontSize:14,color:T.text,fontWeight:600,marginLeft:"auto"}}>{a.unit==="pct_oil"?(effOilG*a.amount/100).toFixed(1):a.amount}{a.unit==="pct_oil"?"g":a.unit}</span>
                         </div>
-                        {a.unit==="pct_oil"&&<p style={{fontSize:10,color:T.textDim}}>≈ {(effOilG*a.amount/100).toFixed(1)}g</p>}
-                        {a.naohFactor>0&&a.amount>0&&<p style={{fontSize:10,color:"#C0C040"}}>⚗ +{((a.unit==="pct_oil"?effOilG*a.amount/100:a.amount)*a.naohFactor).toFixed(2)}g extra NaOH</p>}
+                        {a.naohFactor>0&&a.amount>0&&<p style={{fontSize:10,color:ac}}>⚗ +{((a.unit==="pct_oil"?effOilG*a.amount/100:a.amount)*a.naohFactor).toFixed(2)}g extra NaOH</p>}
                         <div style={{marginTop:6}}><ToggleSwitch value={a.liquidDiscount} onChange={v=>updAdditive(a.id,"liquidDiscount",v)} label="Liquid Discount?" T={T}/></div>
                         {p?.note&&<p style={{fontSize:10,color:T.textDim,marginTop:4}}>💡 {p.note}</p>}
                       </div>
@@ -1129,14 +1196,14 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
           {/* Step 6 — Fragrances */}
           <Step n={7} title="Fragrances" T={T} accent={ac} defaultOpen={false}>
             <div style={{marginBottom:12}}>
-              <RadioOpt label={`${fragPct}% oil weight — recommended 3%`} selected={fragMode==="oil_pct"} onClick={()=>setFragMode("oil_pct")} T={T}
-                sublabel={`Required: ${fragWeight.toFixed(1)}g`}/>
-              {fragMode==="oil_pct"&&<div style={{display:"flex",alignItems:"center",gap:10,marginLeft:26,marginBottom:6}}>
-                <input type="range" min="1" max="6" step="0.5" value={fragPct} onChange={(e:ChangeEvent<HTMLInputElement>)=>setFragPct(parseFloat(e.target.value))} style={{flex:1,width:"100%"}}/>
-                <span style={{fontSize:12,fontWeight:600,color:ac}}>{fragPct}%</span>
+              <RadioOpt label="% oil weight — recommended 3%" selected={fragMode==="oil_pct"} onClick={()=>setFragMode("oil_pct")} T={T}/>
+              {fragMode==="oil_pct"&&<div style={{display:"flex",alignItems:"center",gap:8,marginLeft:26,marginBottom:6}}>
+                <input type="number" min="0.5" max="10" step="0.5" value={fragPct} onChange={(e:ChangeEvent<HTMLInputElement>)=>setFragPct(parseFloat(e.target.value)||3)}
+                  style={{width:64,background:T.inputBg,border:`1px solid ${T.border}`,borderRadius:6,padding:"6px 8px",color:ac,fontSize:15,fontWeight:700,outline:"none",textAlign:"right"}}/>
+                <span style={{fontSize:13,color:T.textMuted,fontWeight:500}}>%</span>
+                <span style={{fontSize:14,color:T.text,fontWeight:600,marginLeft:"auto"}}>{fragWeight.toFixed(1)}g</span>
               </div>}
-              <RadioOpt label="g/kg of oils" selected={fragMode==="g_per_kg"} onClick={()=>setFragMode("g_per_kg")} T={T}
-                sublabel={`Required: ${fragWeight.toFixed(1)}g`}/>
+              <RadioOpt label="g/kg of oils" selected={fragMode==="g_per_kg"} onClick={()=>setFragMode("g_per_kg")} T={T}/>
               {fragMode==="g_per_kg"&&<div style={{display:"flex",alignItems:"center",gap:8,marginLeft:26,marginBottom:6}}>
                 <input type="number" min="0" max="100" step="1" value={fragPct} onChange={(e:ChangeEvent<HTMLInputElement>)=>setFragPct(parseFloat(e.target.value)||30)}
                   style={{width:60,background:T.inputBg,border:`1px solid ${T.border}`,borderRadius:6,padding:"5px 8px",color:ac,fontSize:13,fontWeight:600,outline:"none"}}/>
@@ -1299,16 +1366,30 @@ export default function SoapCalcAI({onViewPricing,onViewRecipes,onViewBatches,au
                         setBlendAnalysis("");
                         try{
                           const oilList=oilBreakdown.map(o=>`${OIL_DISPLAY[o.oil]} ${o.dp}%`).join(", ");
-                          const prompt=`Analyze this cold process soap blend as an expert soapmaker. Be concise (3-4 sentences max).
+                          const liqList=customLiquids.map(l=>`${l.name} ${l.pct}%`).join(", ");
+                          const addList=additives.map(a=>`${a.name} ${a.amount}${a.unit==="pct_oil"?`% oils (≈${(effOilG*a.amount/100).toFixed(1)}g)`:a.unit} at ${a.addAt}`).join(", ");
+                          const fragEntries=fragrances.filter(f=>f.name).map(f=>`${f.name} ${f.amount}g`).join(", ");
+                          const fragInfo=fragWeight>0?`${fragPct}% oil weight = ${fragWeight.toFixed(1)}g total${fragEntries?` (${fragEntries})`:""}`:(fragEntries||"none");
+                          const isSaltBar=additives.some(a=>a.name.toLowerCase().includes("salt")&&a.amount>=20);
+                          const hasMilk=customLiquids.some(l=>l.name.toLowerCase().includes("milk"));
+                          const recipeType=isSaltBar?"SALT BAR":hasMilk?"MILK SOAP":"standard soap";
+                          const prompt=`You are an expert soapmaker. Analyze this ${recipeType} recipe. Be concise (3-4 sentences max).
 
+${isSaltBar?`IMPORTANT: This is a SALT BAR. Salt bars intentionally use 75-80% coconut oil with 15-20% superfat — this is CORRECT for salt bars (not excessive). Salt at 50-100% of oil weight is normal for salt bars. Do NOT suggest reducing superfat to 5-7% or salt to 1-2% — that would ruin the salt bar. Judge by salt bar standards, not regular soap standards.`:""}
+${hasMilk?`IMPORTANT: This is a MILK SOAP. Milk replaces some/all water. Lower temps and lighter trace are expected.`:""}
+
+Soap type: ${soapType}
 Oils: ${oilList}
 Superfat: ${superfat}%
-Scores: Bubbly Lather ${Math.round(scores.bubblyLather)}, Cleansing ${Math.round(scores.cleansing)}, Condition ${Math.round(scores.condition)}, Hardness ${Math.round(scores.hardness)}, INS ${Math.round(scores.ins)}, Iodine ${Math.round(scores.iodine)}
-Fatty acids: Lauric ${Math.round(fa.lauric)}%, Oleic ${Math.round(fa.oleic)}%, Linoleic ${Math.round(fa.linoleic)}%
-Soap type: ${soapType}
+Water:Lye ratio: ${(waterAmount/lyeWeight).toFixed(2)}:1
+Custom liquids: ${liqList||"Distilled Water 100%"}
+Additives: ${addList||"none"}
+Fragrances: ${fragInfo}
+Scores: Hardness ${Math.round(scores.hardness)}, Cleansing ${Math.round(scores.cleansing)}, Condition ${Math.round(scores.condition)}, Bubbly ${Math.round(scores.bubblyLather)}, Creamy ${Math.round(scores.creamyLather)}, INS ${Math.round(scores.ins)}, Iodine ${Math.round(scores.iodine)}
+Fatty acids: Lauric ${Math.round(fa.lauric)}%, Palmitic ${Math.round(fa.palmitic)}%, Oleic ${Math.round(fa.oleic)}%, Linoleic ${Math.round(fa.linoleic)}%
 
-Give a brief expert assessment of this blend's strengths, any concerns, and one specific improvement suggestion.`;
-                          const r=await fetch("http://localhost:3001/api/messages",{
+Assess strengths, concerns, and one improvement — all in the context of what this recipe is trying to be (${recipeType}).`;
+                          const r=await fetch("http://localhost:3001/api/analyze",{
                             method:"POST",
                             headers:{"Content-Type":"application/json","Authorization":`Bearer ${authToken}`},
                             body:JSON.stringify({
@@ -1328,7 +1409,7 @@ Give a brief expert assessment of this blend's strengths, any concerns, and one 
                         {analyzing?(
                           <svg className="spin" style={{width:12,height:12}} viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeOpacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/></svg>
                         ):<SparkleIcon/>}
-                        <span>{analyzing?"Analyzing blend…":"✦ AI Deep Dive (Haiku)"}</span>
+                        <span>{analyzing?"Analyzing blend…":"✦ AI Deep Dive"}</span>
                       </button>
                     )}
                     {analyzing&&!blendAnalysis&&(
@@ -1346,7 +1427,7 @@ Give a brief expert assessment of this blend's strengths, any concerns, and one 
                             ✕ clear
                           </button>
                         </div>
-                        <p style={{fontSize:11,color:T.textMuted,lineHeight:1.6,fontStyle:"italic",fontFamily:"Playfair Display,serif"}}>
+                        <p style={{fontSize:10,color:T.textMuted,lineHeight:1.6}}>
                           {blendAnalysis}
                         </p>
                       </div>
@@ -1403,13 +1484,16 @@ Give a brief expert assessment of this blend's strengths, any concerns, and one 
       {/* Save modal */}
       {showSaveModal&&authToken&&(
         <SaveModal plan={currentUser?.plan??"free"} recipeCount={recipeCount} loading={saving} error={saveError}
+          T={T} defaultName={aiApplied?aiRecipeName:""}
           onClose={()=>setShowSave(false)}
           onSave={async(data)=>{
             const r=await saveRecipe(authToken,{...data,soapType,batchGrams:effOilG,
               oils:oilBreakdown.map(o=>({name:o.oil,pct:parseFloat(o.dp),grams:o.grams})),
-              superfat,naohWeight:lyeWeight,waterAmount,lyePurity,scores,
+              superfat,naohWeight:lyeWeight,waterAmount,lyePurity,scores:{...scores},
               additives:additives.map(a=>({name:a.name,amount:a.amount,unit:a.unit,addAt:a.addAt,naohFactor:a.naohFactor})),
               fragrances:fragrances.map(f=>({name:f.name,amount:f.amount,mode:f.mode})),
+              fragPct,fragMode,fragWeight,
+              customLiquids:customLiquids.map(l=>({name:l.name,pct:l.pct})),
               notes,aiGenerated:aiApplied});
             if(r){setShowSave(false);setRecipeId(r._id);setRName(r.name);setSaveSuccess(`"${r.name}" saved!`);setTimeout(()=>setSaveSuccess(""),3000);}
           }}/>

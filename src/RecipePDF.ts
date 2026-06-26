@@ -1,13 +1,13 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
 export interface RecipePDFData {
   name: string;
   description?: string;
   authorName: string;
   soapType: "solid" | "liquid";
   batchGrams: number;
+  batchUnit?: "g" | "kg" | "lb" | "oz";
   oils: { name: string; pct: number; grams: number }[];
   superfat: number;
   naohWeight: number;
@@ -23,443 +23,421 @@ export interface RecipePDFData {
     ricinoleic: number; oleic: number; linoleic: number; linolenic: number;
   };
   additives: { name: string; amount: number; unit: string; addAt: string }[];
+  fragrances?: { name: string; amount: number }[];
+  fragWeight?: number;
+  customLiquids?: { name: string; pct: number }[];
+  notes?: string;
   aiGenerated: boolean;
   tags?: string[];
 }
 
-// ── Colors — clean light/print theme ────────────────────────────────────────
-const C = {
-  black:    [30,  30,  30]  as [number,number,number],
-  heading:  [40,  40,  40]  as [number,number,number],
-  body:     [60,  60,  60]  as [number,number,number],
-  muted:    [120, 120, 120] as [number,number,number],
-  light:    [180, 180, 180] as [number,number,number],
-  hairline: [220, 220, 220] as [number,number,number],
-  bg:       [248, 247, 245] as [number,number,number],  // off-white section bg
-  accent:   [156, 116, 42]  as [number,number,number],  // gold
-  green:    [46,  125, 50]  as [number,number,number],
-  amber:    [198, 110, 20]  as [number,number,number],
-  white:    [255, 255, 255] as [number,number,number],
+// ── Brand palette — warm gold + clean neutrals ──────────────────────────────
+const GOLD: [number, number, number]     = [156, 116, 42];
+const GOLD_LIGHT: [number, number, number] = [245, 238, 220];
+const DARK: [number, number, number]     = [35, 32, 28];
+const BODY: [number, number, number]     = [55, 52, 48];
+const MUTED: [number, number, number]    = [130, 125, 118];
+const LINE: [number, number, number]     = [215, 210, 205];
+const BG: [number, number, number]       = [250, 248, 245];
+const WHITE: [number, number, number]    = [255, 255, 255];
+const GREEN: [number, number, number]    = [60, 140, 65];
+const RED: [number, number, number]      = [190, 70, 40];
+
+const rv = (n: number, d = 2) => parseFloat(n.toFixed(d));
+
+const UNIT_CONVERT: Record<string, { factor: number; label: string; dec: number }> = {
+  g:  { factor: 1,            label: "g",  dec: 1 },
+  kg: { factor: 1 / 1000,     label: "kg", dec: 3 },
+  lb: { factor: 1 / 453.592,  label: "lb", dec: 3 },
+  oz: { factor: 1 / 28.3495,  label: "oz", dec: 2 },
 };
-
-const round = (n: number, d = 2) => parseFloat(n.toFixed(d));
-
-// ── Score bar — clean light style ────────────────────────────────────────────
-function drawScoreBar(
-  doc: jsPDF, label: string, value: number,
-  ideal: [number,number], recommended: string,
-  x: number, y: number, w: number
-): void {
-  const inRange = value >= ideal[0] && value <= ideal[1];
-  const barColor = inRange ? C.green : C.amber;
-
-  // Label
-  doc.setFontSize(8.5);
-  doc.setTextColor(...C.body);
-  doc.setFont("helvetica", "normal");
-  doc.text(label, x, y + 3);
-
-  // Track bg
-  const bx = x + 52, bw = w - 110, bh = 5;
-  doc.setFillColor(...C.hairline);
-  doc.roundedRect(bx, y - 1, bw, bh, 1, 1, "F");
-
-  // Ideal range band
-  const idealX = bx + (ideal[0] / 100) * bw;
-  const idealW = ((ideal[1] - ideal[0]) / 100) * bw;
-  doc.setFillColor(inRange ? 200 : 230, inRange ? 230 : 220, inRange ? 200 : 200);
-  doc.roundedRect(idealX, y - 1, idealW, bh, 1, 1, "F");
-
-  // Fill bar
-  doc.setFillColor(...barColor);
-  const fillW = Math.max(Math.min(value, 100) / 100 * bw, 0);
-  if (fillW > 0) doc.roundedRect(bx, y - 1, fillW, bh, 1, 1, "F");
-
-  // Value
-  doc.setFontSize(8.5);
-  doc.setTextColor(...barColor);
-  doc.setFont("helvetica", "bold");
-  doc.text(`${Math.round(value)}`, bx + bw + 3, y + 3);
-
-  // Recommended range
-  doc.setFontSize(7.5);
-  doc.setTextColor(...C.muted);
-  doc.setFont("helvetica", "normal");
-  doc.text(recommended, bx + bw + 18, y + 3);
+function fmtU(grams: number, unit: string): string {
+  const u = UNIT_CONVERT[unit] ?? UNIT_CONVERT.g;
+  return `${(grams * u.factor).toFixed(u.dec)} ${u.label}`;
 }
 
-// ── Section header ────────────────────────────────────────────────────────────
-function sectionHeader(doc: jsPDF, title: string, y: number, pageW: number): number {
-  doc.setFillColor(...C.bg);
-  doc.rect(14, y, pageW - 28, 9, "F");
-  doc.setDrawColor(...C.hairline);
-  doc.setLineWidth(0.3);
-  doc.rect(14, y, pageW - 28, 9, "S");
-  doc.setFontSize(8.5);
-  doc.setTextColor(...C.accent);
-  doc.setFont("helvetica", "bold");
-  doc.text(title.toUpperCase(), 18, y + 6);
-  doc.setFont("helvetica", "normal");
-  return y + 13;
-}
 
-// ── Divider line ──────────────────────────────────────────────────────────────
-function divider(doc: jsPDF, y: number, pageW: number): void {
-  doc.setDrawColor(...C.hairline);
-  doc.setLineWidth(0.3);
-  doc.line(14, y, pageW - 14, y);
-}
-
-// ── Main PDF generator ────────────────────────────────────────────────────────
 export async function generateRecipePDF(data: RecipePDFData): Promise<void> {
-  const doc   = new jsPDF({ unit: "mm", format: "a4", compress: true });
-  const pageW = doc.internal.pageSize.getWidth();
-  const pageH = doc.internal.pageSize.getHeight();
-  const M     = 14; // margin
-  let y       = 0;
+  const doc = new jsPDF({ unit: "mm", format: "a4", compress: true });
+  const W   = doc.internal.pageSize.getWidth();
+  const H   = doc.internal.pageSize.getHeight();
+  const M   = 16;
+  const CW  = W - M * 2;
+  let y     = 0;
 
-  const newPage = () => {
-    doc.addPage();
+  const unit     = data.batchUnit ?? "g";
+  const showAlt  = unit !== "g";
+  const lye      = data.soapType === "liquid" ? "KOH" : "NaOH";
+  const lyeConc  = data.naohWeight / (data.naohWeight + data.waterAmount) * 100;
+  const lyeRatio = data.waterAmount / data.naohWeight;
+  const fragWt   = data.fragWeight ?? 0;
+  const total    = data.batchGrams + data.naohWeight + data.waterAmount + fragWt;
+  const sat      = data.fa.lauric + data.fa.myristic + data.fa.palmitic + data.fa.stearic;
+  const unsat    = data.fa.oleic + data.fa.linoleic + data.fa.linolenic + data.fa.ricinoleic;
+
+  const getY = () => (doc as any).lastAutoTable?.finalY ?? y;
+  const checkSpace = (n: number) => { if (y + n > H - 14) { doc.addPage(); y = 16; } };
+
+  // ── Helpers ────────────────────────────────────────────────────────────
+  const goldBar = (yy: number, h: number) => {
+    doc.setFillColor(...GOLD);
+    doc.rect(M, yy, 2.5, h, "F");
+  };
+
+  const label = (text: string, x: number, yy: number) => {
     doc.setFontSize(7.5);
-    doc.setTextColor(...C.muted);
+    doc.setTextColor(...MUTED);
     doc.setFont("helvetica", "normal");
-    doc.text(
-      `Generated by SoapCalcAI · Handle lye with care · soapcalcai.com`,
-      M, pageH - 7
-    );
-    doc.text(`Page ${doc.getNumberOfPages()}`, pageW - M, pageH - 7, { align: "right" });
-    y = 18;
+    doc.text(text.toUpperCase(), x, yy);
   };
 
-  const checkSpace = (needed: number) => {
-    if (y + needed > pageH - 16) newPage();
+  const value = (text: string, x: number, yy: number, align: "left" | "right" = "left") => {
+    doc.setFontSize(10);
+    doc.setTextColor(...DARK);
+    doc.setFont("helvetica", "bold");
+    doc.text(text, x, yy, { align });
   };
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // PAGE 1 — Header + Totals + Oils
-  // ══════════════════════════════════════════════════════════════════════════
+  const thinLine = (x1: number, yy: number, x2: number) => {
+    doc.setDrawColor(...LINE);
+    doc.setLineWidth(0.2);
+    doc.line(x1, yy, x2, yy);
+  };
 
-  // Header band
-  doc.setFillColor(...C.bg);
-  doc.rect(0, 0, pageW, 38, "F");
+  // ════════════════════════════════════════════════════════════════════════
+  // HEADER — bold brand stripe
+  // ════════════════════════════════════════════════════════════════════════
+  doc.setFillColor(...GOLD);
+  doc.rect(0, 0, W, 3, "F");
 
-  // Gold left accent bar
-  doc.setFillColor(...C.accent);
-  doc.rect(0, 0, 3, 38, "F");
+  y = 14;
+  doc.setFontSize(22);
+  doc.setTextColor(...DARK);
+  doc.setFont("helvetica", "bold");
+  doc.text(data.name, M, y);
 
-  // Brand
   doc.setFontSize(9);
-  doc.setTextColor(...C.accent);
+  doc.setTextColor(...GOLD);
   doc.setFont("helvetica", "bold");
-  doc.text("SOAPCALCAI", M + 2, 11);
+  doc.text("SoapCalcAI", W - M, 10, { align: "right" });
 
-  // Soap type badge (right)
-  const badge = data.soapType === "liquid" ? "LIQUID SOAP (KOH)" : "SOLID BAR (NaOH)";
-  doc.setFontSize(7.5);
-  doc.setTextColor(...C.muted);
-  doc.setFont("helvetica", "normal");
-  doc.text(badge, pageW - M, 11, { align: "right" });
-
-  // Recipe name
-  doc.setFontSize(20);
-  doc.setTextColor(...C.heading);
-  doc.setFont("helvetica", "bold");
-  doc.text(data.name, M + 2, 24);
-
-  // Author + date
+  y += 5;
   doc.setFontSize(8);
-  doc.setTextColor(...C.muted);
+  doc.setTextColor(...MUTED);
   doc.setFont("helvetica", "normal");
   const dateStr = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
-  doc.text(`by ${data.authorName}  ·  ${dateStr}${data.aiGenerated ? "  ·  ✦ AI Generated" : ""}`, M + 2, 32);
+  const meta = [
+    `by ${data.authorName}`,
+    dateStr,
+    data.soapType === "liquid" ? "Liquid Soap (KOH)" : "Solid Bar (NaOH)",
+    ...(data.aiGenerated ? ["AI Generated"] : []),
+  ].join("  ·  ");
+  doc.text(meta, M, y);
 
-  // Gold bottom line
-  doc.setFillColor(...C.accent);
-  doc.rect(0, 38, pageW, 0.7, "F");
-
-  y = 46;
-
-  // Description
-  if (data.description?.trim()) {
-    doc.setFontSize(9);
-    doc.setTextColor(...C.body);
-    const lines = doc.splitTextToSize(data.description.trim(), pageW - M * 2);
-    doc.text(lines, M, y);
-    y += lines.length * 5 + 4;
+  // Notes
+  const notesText = data.notes?.trim() || data.description?.trim();
+  if (notesText) {
+    y += 5;
+    doc.setFillColor(...BG);
+    const lines = doc.splitTextToSize(notesText, CW - 10);
+    const nh = lines.length * 4 + 6;
+    doc.roundedRect(M, y, CW, nh, 2, 2, "F");
+    doc.setFontSize(8);
+    doc.setTextColor(...BODY);
+    doc.text(lines, M + 5, y + 5);
+    y += nh + 2;
   }
 
-  // ── Recipe Totals ──────────────────────────────────────────────────────────
-  y = sectionHeader(doc, "Recipe Totals", y, pageW);
+  y += 6;
+  thinLine(M, y, W - M);
+  y += 6;
 
-  const lyeConc    = data.naohWeight / (data.naohWeight + data.waterAmount) * 100;
-  const lyeRatio   = data.waterAmount / data.naohWeight;
-  const batchTotal = data.batchGrams + data.naohWeight + data.waterAmount;
-  const lye        = data.soapType === "liquid" ? "KOH" : "NaOH";
-
-  const totals: [string, string, string, string][] = [
-    ["Oil Weight",         `${round(data.batchGrams, 0)} g`,
-     "Super Fat",          `${data.superfat}%`],
-    [`${lye} Weight`,      `${round(data.naohWeight, 2)} g  @ ${data.lyePurity}% purity`,
-     "Lye Concentration",  `${round(lyeConc, 1)}%`],
-    ["Liquid Required",    `${round(data.waterAmount, 1)} g`,
-     "Liquid : Lye Ratio", `${round(lyeRatio, 2)}:1`],
-    ["Total Batch Weight", `${round(batchTotal, 0)} g`,
-     "Sat : Unsat",        (() => {
-       const sat   = data.fa.lauric+data.fa.myristic+data.fa.palmitic+data.fa.stearic;
-       const unsat = data.fa.oleic+data.fa.linoleic+data.fa.linolenic+data.fa.ricinoleic;
-       return `${Math.round(sat)}:${Math.round(unsat)}`;
-     })()],
-    ...(data.soapType === "liquid" && data.dilutionRatio ? [[
-      "Dilution Ratio",   `1 : ${data.dilutionRatio}`,
-      "Finished Soap",    `${round(batchTotal * (1 + data.dilutionRatio), 0)} g`,
-    ] as [string,string,string,string]] : []),
+  // ════════════════════════════════════════════════════════════════════════
+  // KEY NUMBERS — 4 metric cards in a row
+  // ════════════════════════════════════════════════════════════════════════
+  const cardW = (CW - 9) / 4;
+  const cards = [
+    { lbl: "Oil Weight",   val: fmtU(data.batchGrams, unit) },
+    { lbl: `${lye} Weight`, val: `${rv(data.naohWeight, 2)} g` },
+    { lbl: "Liquid",       val: `${rv(data.waterAmount, 1)} g` },
+    { lbl: "Total Batch",  val: fmtU(total, unit) },
   ];
 
-  totals.forEach(([l1, v1, l2, v2], i) => {
-    if (i > 0) {
-      doc.setDrawColor(...C.hairline);
-      doc.setLineWidth(0.2);
-      doc.line(M, y - 1, pageW - M, y - 1);
-    }
-    // Left col
-    doc.setFontSize(8.5);
-    doc.setTextColor(...C.muted);
-    doc.setFont("helvetica", "normal");
-    doc.text(l1, M, y + 4);
-    doc.setTextColor(...C.body);
-    doc.setFont("helvetica", "bold");
-    doc.text(v1, M + 52, y + 4);
-    // Right col
-    doc.setTextColor(...C.muted);
-    doc.setFont("helvetica", "normal");
-    doc.text(l2, pageW / 2 + 4, y + 4);
-    doc.setTextColor(...C.body);
-    doc.setFont("helvetica", "bold");
-    doc.text(v2, pageW / 2 + 56, y + 4);
-    doc.setFont("helvetica", "normal");
-    y += 9;
+  cards.forEach((c, i) => {
+    const cx = M + i * (cardW + 3);
+    doc.setFillColor(...BG);
+    doc.roundedRect(cx, y, cardW, 16, 2, 2, "F");
+    label(c.lbl, cx + 4, y + 6);
+    value(c.val, cx + 4, y + 13);
   });
+  y += 20;
 
-  y += 4;
+  // Second row — smaller details
+  const detailY = y;
+  const details = [
+    [`Super Fat: ${data.superfat}%`, `Lye Purity: ${data.lyePurity}%`, `Lye Conc: ${rv(lyeConc, 0)}%`, `Ratio: ${rv(lyeRatio, 2)}:1`],
+    [`Sat:Unsat ${Math.round(sat)}:${Math.round(unsat)}`, `INS ${Math.round(data.scores.ins)}`, `Iodine ${Math.round(data.scores.iodine)}`, ...(fragWt > 0 ? [`Fragrance ${rv(fragWt, 1)}g`] : [])],
+  ];
+  doc.setFontSize(8);
+  doc.setTextColor(...BODY);
+  doc.setFont("helvetica", "normal");
+  details.forEach((row, ri) => {
+    doc.text(row.join("    ·    "), M, detailY + ri * 5 + 3);
+  });
+  y = detailY + details.length * 5 + 5;
 
-  // ── Oil Formula ────────────────────────────────────────────────────────────
-  checkSpace(20);
-  y = sectionHeader(doc, "Oil Formula", y, pageW);
+  thinLine(M, y, W - M);
+  y += 6;
+
+  // ════════════════════════════════════════════════════════════════════════
+  // OIL BLEND — with gold accent bar
+  // ════════════════════════════════════════════════════════════════════════
+  checkSpace(30);
+  goldBar(y, 6);
+  doc.setFontSize(9);
+  doc.setTextColor(...DARK);
+  doc.setFont("helvetica", "bold");
+  doc.text("Oil Blend", M + 6, y + 4.5);
+  y += 9;
+
+  const oilHead = showAlt ? ["Oil", "%", unit.toUpperCase(), "Grams"] : ["Oil", "%", "Grams"];
+  const oilBody = data.oils.map(o => showAlt
+    ? [o.name, `${rv(o.pct, 1)}`, fmtU(o.grams, unit).split(" ")[0], `${rv(o.grams, 0)}`]
+    : [o.name, `${rv(o.pct, 1)}`, `${rv(o.grams, 0)}`]
+  );
+  const oilFoot = showAlt
+    ? ["Total", "100", fmtU(data.batchGrams, unit).split(" ")[0], `${rv(data.batchGrams, 0)}`]
+    : ["Total", "100", `${rv(data.batchGrams, 0)}`];
 
   autoTable(doc, {
-    startY: y,
-    margin: { left: M, right: M },
-    head: [["Oil", "Weight (g)", "% of Batch"]],
-    body: data.oils.map(o => [
-      `${o.name} Oil`,
-      `${round(o.grams, 0)}`,
-      `${round(o.pct, 1)}%`,
-    ]),
-    foot: [["TOTAL", `${round(data.batchGrams, 0)}`, "100%"]],
-    styles:      { fontSize: 8.5, cellPadding: 3.5, textColor: C.body as any, lineColor: C.hairline as any, lineWidth: 0.2 },
-    headStyles:  { fillColor: C.bg as any, textColor: C.accent as any, fontStyle: "bold", fontSize: 8, lineColor: C.hairline as any },
-    footStyles:  { fillColor: C.bg as any, textColor: C.heading as any, fontStyle: "bold" },
-    alternateRowStyles: { fillColor: [252, 252, 251] as any },
-    bodyStyles:  { fillColor: C.white as any },
-    columnStyles: {
-      0: { cellWidth: 70 },
-      1: { halign: "right", cellWidth: 30 },
-      2: { halign: "right", cellWidth: 30 },
+    startY: y, margin: { left: M, right: M },
+    head: [oilHead], body: oilBody, foot: [oilFoot],
+    styles: { fontSize: 8.5, cellPadding: 2.8, textColor: BODY as any, lineColor: LINE as any, lineWidth: 0.2 },
+    headStyles: { fillColor: GOLD_LIGHT as any, textColor: GOLD as any, fontStyle: "bold", fontSize: 8 },
+    footStyles: { fillColor: GOLD_LIGHT as any, textColor: DARK as any, fontStyle: "bold" },
+    bodyStyles: { fillColor: WHITE as any },
+    alternateRowStyles: { fillColor: BG as any },
+    columnStyles: showAlt ? {
+      0: { cellWidth: 55 }, 1: { halign: "right", cellWidth: 18 },
+      2: { halign: "right" }, 3: { halign: "right", fontStyle: "bold" },
+    } : {
+      0: { cellWidth: 80 }, 1: { halign: "right", cellWidth: 22 },
+      2: { halign: "right", fontStyle: "bold" },
     },
   });
+  y = getY() + 5;
 
-  y = (doc as any).lastAutoTable.finalY + 6;
-
-  // ── Custom Additives ───────────────────────────────────────────────────────
-  if (data.additives.length > 0) {
-    checkSpace(20);
-    y = sectionHeader(doc, "Custom Additives", y, pageW);
+  // ════════════════════════════════════════════════════════════════════════
+  // ADDITIVES + FRAGRANCES + LIQUIDS — stacked compact sections
+  // ════════════════════════════════════════════════════════════════════════
+  const miniSection = (title: string, rows: string[][]) => {
+    checkSpace(15);
+    goldBar(y, 5);
+    doc.setFontSize(8.5);
+    doc.setTextColor(...DARK);
+    doc.setFont("helvetica", "bold");
+    doc.text(title, M + 6, y + 3.8);
+    y += 7;
     autoTable(doc, {
-      startY: y,
-      margin: { left: M, right: M },
-      head: [["Additive", "Amount", "When to Add"]],
-      body: data.additives.map(a => [
-        a.name || "—",
-        `${a.amount} ${a.unit}`,
-        a.addAt === "liquid" ? "With liquid" : a.addAt === "fats" ? "With fats" : "At trace",
-      ]),
-      styles:      { fontSize: 8.5, cellPadding: 3.5, textColor: C.body as any, lineColor: C.hairline as any, lineWidth: 0.2 },
-      headStyles:  { fillColor: C.bg as any, textColor: C.accent as any, fontStyle: "bold", fontSize: 8, lineColor: C.hairline as any },
-      bodyStyles:  { fillColor: C.white as any },
-      alternateRowStyles: { fillColor: [252, 252, 251] as any },
+      startY: y, margin: { left: M, right: M }, head: [], body: rows,
+      styles: { fontSize: 8, cellPadding: 2.2, textColor: BODY as any, lineColor: LINE as any, lineWidth: 0.15 },
+      bodyStyles: { fillColor: WHITE as any },
+      alternateRowStyles: { fillColor: BG as any },
+      columnStyles: { 1: { halign: "right" }, 2: { halign: "right" } },
     });
-    y = (doc as any).lastAutoTable.finalY + 6;
+    y = getY() + 4;
+  };
+
+  if (data.additives.length > 0) {
+    miniSection("Additives", data.additives.map(a => [
+      a.name,
+      `${a.amount} ${a.unit === "pct_oil" ? "% oils" : a.unit}`,
+      a.addAt === "liquid" ? "w/ Liquid" : a.addAt === "fats" ? "w/ Fats" : "At Trace",
+    ]));
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // PAGE 2 — Properties + Fatty Acids + Instructions + Safety
-  // ══════════════════════════════════════════════════════════════════════════
-  newPage();
+  if ((data.fragrances && data.fragrances.length > 0) || fragWt > 0) {
+    const fRows: string[][] = [];
+    if (data.fragrances && data.fragrances.length > 0) {
+      data.fragrances.forEach(f => fRows.push([f.name || "Fragrance", `${rv(f.amount, 1)} g`]));
+    } else {
+      fRows.push(["Fragrance blend", `${rv(fragWt, 1)} g`]);
+    }
+    miniSection("Fragrances", fRows);
+  }
 
-  // ── Recipe Properties ──────────────────────────────────────────────────────
-  y = sectionHeader(doc, "Recipe Properties", y, pageW);
+  const hasLiquids = data.customLiquids && data.customLiquids.length > 0 &&
+    !(data.customLiquids.length === 1 && data.customLiquids[0].name === "Distilled Water" && data.customLiquids[0].pct === 100);
+  if (hasLiquids) {
+    miniSection("Custom Liquids", data.customLiquids!.map(l => [
+      l.name, `${rv(l.pct, 0)}%`, `${rv(data.waterAmount * l.pct / 100, 1)} g`,
+    ]));
+  }
 
-  const scoreItems: [string, number, [number,number], string][] = [
-    ["Bubbly Lather",  data.scores.bubblyLather,  [14,46],   "14 - 46"],
-    ["Cleansing",      data.scores.cleansing,      [12,22],   "12 - 22"],
-    ["Condition",      data.scores.condition,      [44,69],   "44 - 69"],
-    ["Hardness",       data.scores.hardness,       [29,54],   "29 - 54"],
-    ["Longevity",      data.scores.longevity,      [25,50],   "25 - 50"],
-    ["Creamy Lather",  data.scores.creamyLather,   [16,48],   "16 - 48"],
-    ["Iodine",         data.scores.iodine,         [41,70],   "41 - 70"],
-    ["INS",            data.scores.ins,            [136,165], "136 - 165"],
+  // ════════════════════════════════════════════════════════════════════════
+  // SOAP QUALITY — visual score dots
+  // ════════════════════════════════════════════════════════════════════════
+  checkSpace(55);
+  thinLine(M, y, W - M);
+  y += 6;
+  goldBar(y, 6);
+  doc.setFontSize(9);
+  doc.setTextColor(...DARK);
+  doc.setFont("helvetica", "bold");
+  doc.text("Soap Quality Profile", M + 6, y + 4.5);
+  y += 10;
+
+  const scores: [string, number, [number, number]][] = [
+    ["Hardness",      data.scores.hardness,      [29, 54]],
+    ["Cleansing",     data.scores.cleansing,      [12, 22]],
+    ["Conditioning",  data.scores.condition,      [44, 69]],
+    ["Bubbly Lather", data.scores.bubblyLather,   [14, 46]],
+    ["Creamy Lather", data.scores.creamyLather,   [16, 48]],
+    ["Longevity",     data.scores.longevity,      [25, 50]],
+    ["Iodine",        data.scores.iodine,         [41, 70]],
+    ["INS",           data.scores.ins,            [136, 165]],
   ];
 
-  const bw2 = (pageW - M * 2) / 2 - 6;
-  scoreItems.forEach(([label, value, ideal, rec], i) => {
+  const halfW = (CW - 8) / 2;
+  scores.forEach(([name, val, [lo, hi]], i) => {
     const col = i % 2;
     const row = Math.floor(i / 2);
-    const bx  = M + col * (bw2 + 12);
-    const by  = y + row * 12;
-    checkSpace(14);
-    drawScoreBar(doc, label, value, ideal, rec, bx, by, bw2);
+    const sx  = M + col * (halfW + 8);
+    const sy  = y + row * 8;
+
+    const inRange = val >= lo && val <= hi;
+    const dotColor = inRange ? GREEN : RED;
+
+    // Dot
+    doc.setFillColor(...dotColor);
+    doc.circle(sx + 2, sy + 1.5, 1.2, "F");
+
+    // Label
+    doc.setFontSize(8);
+    doc.setTextColor(...BODY);
+    doc.setFont("helvetica", "normal");
+    doc.text(name, sx + 6, sy + 2.5);
+
+    // Value
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...dotColor);
+    doc.text(`${Math.round(val)}`, sx + halfW * 0.6, sy + 2.5);
+
+    // Range
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...MUTED);
+    doc.setFontSize(7.5);
+    doc.text(`${lo}–${hi}`, sx + halfW * 0.75, sy + 2.5);
   });
+  y += Math.ceil(scores.length / 2) * 8 + 4;
 
-  y += Math.ceil(scoreItems.length / 2) * 12 + 8;
+  // Fatty acids — compact inline
+  doc.setFontSize(7.5);
+  doc.setTextColor(...MUTED);
+  doc.setFont("helvetica", "normal");
+  const faLine = [
+    `Lauric ${Math.round(data.fa.lauric)}`,
+    `Myristic ${Math.round(data.fa.myristic)}`,
+    `Palmitic ${Math.round(data.fa.palmitic)}`,
+    `Stearic ${Math.round(data.fa.stearic)}`,
+    `Ricinoleic ${Math.round(data.fa.ricinoleic)}`,
+    `Oleic ${Math.round(data.fa.oleic)}`,
+    `Linoleic ${Math.round(data.fa.linoleic)}`,
+    `Linolenic ${Math.round(data.fa.linolenic)}`,
+  ].join("  ·  ");
+  doc.text(`Fatty Acids %:  ${faLine}`, M, y + 2);
+  y += 6;
 
-  // ── Fatty Acids ────────────────────────────────────────────────────────────
-  checkSpace(60);
-  y = sectionHeader(doc, "Fatty Acids %", y, pageW);
+  thinLine(M, y, W - M);
+  y += 6;
 
-  autoTable(doc, {
-    startY: y,
-    margin: { left: M, right: M },
-    head: [["Fatty Acid", "% in Blend", "Type", "Effect on Soap"]],
-    body: (Object.entries(data.fa) as [string, number][]).map(([key, val]) => {
-      const info: Record<string, [string, string]> = {
-        lauric:     ["Saturated",   "Hard bar, big bubbly lather, cleansing"],
-        myristic:   ["Saturated",   "Hardness, fluffy lather, cleansing"],
-        palmitic:   ["Saturated",   "Hard, long-lasting, creamy lather"],
-        stearic:    ["Saturated",   "Very hard, stable, creamy lather"],
-        ricinoleic: ["Unsaturated", "Conditioning, glossy, lather boost"],
-        oleic:      ["Unsaturated", "Conditioning, soft bar, skin-loving"],
-        linoleic:   ["Unsaturated", "Very conditioning, moisturizing"],
-        linolenic:  ["Unsaturated", "Conditioning, but shortens shelf life"],
-      };
-      const [type, effect] = info[key] ?? ["—", "—"];
-      return [
-        key.charAt(0).toUpperCase() + key.slice(1),
-        `${round(val, 1)}%`,
-        type,
-        effect,
-      ];
-    }),
-    styles:      { fontSize: 8, cellPadding: 2.8, textColor: C.body as any, lineColor: C.hairline as any, lineWidth: 0.2 },
-    headStyles:  { fillColor: C.bg as any, textColor: C.accent as any, fontStyle: "bold", fontSize: 8, lineColor: C.hairline as any },
-    bodyStyles:  { fillColor: C.white as any },
-    alternateRowStyles: { fillColor: [252, 252, 251] as any },
-    columnStyles: { 0: { cellWidth: 28 }, 1: { cellWidth: 24, halign: "right" }, 2: { cellWidth: 28 }, 3: {} },
-  });
-
-  y = (doc as any).lastAutoTable.finalY + 8;
-
-  // ── Batch Instructions ─────────────────────────────────────────────────────
-  checkSpace(20);
-  y = sectionHeader(doc, "Batch Instructions", y, pageW);
+  // ════════════════════════════════════════════════════════════════════════
+  // QUICK GUIDE — numbered steps
+  // ════════════════════════════════════════════════════════════════════════
+  checkSpace(50);
+  goldBar(y, 6);
+  doc.setFontSize(9);
+  doc.setTextColor(...DARK);
+  doc.setFont("helvetica", "bold");
+  doc.text("How to Make This Soap", M + 6, y + 4.5);
+  y += 10;
 
   const isLiquid = data.soapType === "liquid";
   const steps = isLiquid ? [
-    { n:"1.", title:"Prepare workspace",    detail:"Wear gloves, goggles, and long sleeves. Clear workspace of food and children." },
-    { n:"2.", title:"Measure oils",         detail:`Weigh out: ${data.oils.map(o=>`${o.name} ${round(o.grams,0)}g`).join(", ")}. Melt solid oils first.` },
-    { n:"3.", title:"Prepare KOH lye",     detail:`Slowly add ${round(data.naohWeight,2)}g KOH (${data.lyePurity}% purity) to ${round(data.waterAmount,1)}g distilled water. NEVER add water to lye.` },
-    { n:"4.", title:"Combine",             detail:"When both oils and lye are ~50–60°C, pour lye into oils. Stick blend to trace." },
-    { n:"5.", title:"Cook (Hot Process)",  detail:"Cook at 65–80°C for 1–2 hours until neutral pH (7–8 on pH strips)." },
-    { n:"6.", title:"Dilute",              detail:`Dissolve paste in hot distilled water at 1:${data.dilutionRatio ?? 2.5} ratio. Stir until clear.` },
-    { n:"7.", title:"Add additives",       detail:data.additives.length > 0 ? `Add: ${data.additives.map(a=>`${a.name} (${a.amount}${a.unit})`).join(", ")}.` : "No additives for this recipe." },
-    { n:"8.", title:"Bottle",              detail:"Pour into bottles. Allow 24–48h to clarify before use." },
+    "Gear up — gloves, goggles, long sleeves. Work in a ventilated area.",
+    `Weigh oils: ${data.oils.map(o => `${o.name} ${rv(o.grams, 0)}g`).join(", ")}. Melt solids gently.`,
+    `Prepare lye — slowly add ${rv(data.naohWeight, 2)}g KOH to ${rv(data.waterAmount, 1)}g water. Never reverse.`,
+    "Combine at 50–60°C. Pour lye into oils. Stick blend to trace.",
+    "Cook (hot process) at 65–80°C for 1–2 hours until pH reaches 7–8.",
+    `Dilute paste in hot water at 1:${data.dilutionRatio ?? 2.5} ratio. Stir until clear.`,
+    ...(data.additives.length > 0 ? [`Add: ${data.additives.map(a => `${a.name} (${a.amount}${a.unit === "pct_oil" ? "%" : a.unit})`).join(", ")}.`] : []),
+    "Bottle and let clarify 24–48 hours before use.",
   ] : [
-    { n:"1.", title:"Prepare workspace",        detail:"Wear gloves, goggles, and long sleeves. Prepare molds, thermometer, and stick blender." },
-    { n:"2.", title:"Measure oils",             detail:`Weigh out: ${data.oils.map(o=>`${o.name} ${round(o.grams,0)}g`).join(", ")}. Melt solid oils gently.` },
-    { n:"3.", title:"Prepare NaOH lye",         detail:`Slowly add ${round(data.naohWeight,2)}g NaOH (${data.lyePurity}% purity) to ${round(data.waterAmount,1)}g cool distilled water. NEVER add water to lye. Stir until dissolved.` },
-    { n:"4.", title:"Combine at temperature",   detail:"When both oils and lye are 40–50°C (within 10°C), pour lye into oils while stick blending." },
-    { n:"5.", title:"Trace",                    detail:"Stick blend in short bursts until light trace (batter thickens like thin pudding)." },
-    { n:"6.", title:"Add additives",            detail:data.additives.filter(a=>a.addAt==="trace").length > 0 ? `At trace: ${data.additives.filter(a=>a.addAt==="trace").map(a=>`${a.name} (${a.amount}${a.unit})`).join(", ")}.` : "No trace additives for this recipe." },
-    { n:"7.", title:"Pour into molds",          detail:"Pour into molds. Tap to release bubbles. Cover and insulate 24–48h." },
-    { n:"8.", title:"Unmold & cure",            detail:"Unmold after 24–48h. Cure 4–6 weeks in ventilated area. Curing improves hardness and lather." },
+    "Gear up — gloves, goggles, long sleeves. Ventilated area, no distractions.",
+    `Weigh oils: ${data.oils.map(o => `${o.name} ${rv(o.grams, 0)}g`).join(", ")}. Melt solids first.`,
+    `Prepare lye — slowly add ${rv(data.naohWeight, 2)}g NaOH to ${rv(data.waterAmount, 1)}g cool water. Never reverse.`,
+    "When both are 40–50°C (within 10°C of each other), pour lye into oils.",
+    "Stick blend in short bursts until light trace — batter thickens like thin pudding.",
+    ...(data.additives.filter(a => a.addAt === "trace").length > 0
+      ? [`At trace, add: ${data.additives.filter(a => a.addAt === "trace").map(a => `${a.name}`).join(", ")}.`] : []),
+    "Pour into mold. Tap to release air bubbles. Cover and insulate 24–48h.",
+    "Unmold after 24–48h. Cure 4–6 weeks in a ventilated area. Longer cure = harder, milder bar.",
   ];
 
-  steps.forEach(({ n, title, detail }) => {
-    checkSpace(14);
-    doc.setFontSize(8.5);
-    doc.setTextColor(...C.accent);
+  steps.forEach((step, i) => {
+    checkSpace(12);
+    // Number circle
+    doc.setFillColor(...GOLD);
+    doc.circle(M + 3, y + 1.5, 2.5, "F");
+    doc.setFontSize(7);
+    doc.setTextColor(...WHITE);
     doc.setFont("helvetica", "bold");
-    doc.text(n, M, y + 4);
-    doc.setTextColor(...C.heading);
-    doc.text(title, M + 7, y + 4);
-    y += 6;
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(...C.body);
+    doc.text(`${i + 1}`, M + 3, y + 2.5, { align: "center" });
+
+    // Step text
     doc.setFontSize(8);
-    const lines = doc.splitTextToSize(detail, pageW - M * 2 - 10);
-    doc.text(lines, M + 7, y);
-    y += lines.length * 4.5 + 4;
-  });
-
-  // ── Safety Notes ───────────────────────────────────────────────────────────
-  checkSpace(50);
-  y += 2;
-  y = sectionHeader(doc, "⚠ Safety Notes", y, pageW);
-
-  // Light amber border box
-  doc.setFillColor(255, 249, 235);
-  doc.setDrawColor(198, 150, 50);
-  doc.setLineWidth(0.4);
-  doc.roundedRect(M, y, pageW - M * 2, 52, 2, 2, "FD");
-
-  const safetyNotes = [
-    "Always add LYE TO WATER — never water to lye. This causes a violent, dangerous reaction.",
-    "Wear PPE: chemical-resistant gloves, safety goggles, and long sleeves at all times.",
-    "Work in a well-ventilated area. Lye fumes are caustic — avoid inhaling.",
-    "Keep children and pets away from the workspace during the entire process.",
-    "Use dedicated soap-making equipment — never reuse for food after lye contact.",
-    "Skin contact with lye: rinse with large amounts of cool water for 15+ minutes.",
-    isLiquid
-      ? "KOH soap: cook to neutral pH before diluting. Test with pH strips (target 7–9)."
-      : "Cold process soap requires 4–6 weeks cure time. Freshly made soap is still caustic.",
-  ];
-
-  let sy = y + 6;
-  safetyNotes.forEach(note => {
-    doc.setFontSize(7.5);
-    doc.setTextColor(140, 90, 20);
-    doc.setFont("helvetica", "bold");
-    doc.text("•", M + 4, sy);
+    doc.setTextColor(...BODY);
     doc.setFont("helvetica", "normal");
-    doc.setTextColor(100, 70, 10);
-    const lines = doc.splitTextToSize(note, pageW - M * 2 - 14);
-    doc.text(lines, M + 9, sy);
-    sy += lines.length * 4 + 2;
+    const lines = doc.splitTextToSize(step, CW - 14);
+    doc.text(lines, M + 9, y + 2);
+    y += Math.max(lines.length * 4, 5) + 2.5;
   });
 
-  // ── Notes ──────────────────────────────────────────────────────────────────
-  if (data.description?.trim()) {
-    y += 58;
-    checkSpace(20);
-    y = sectionHeader(doc, "Notes", y, pageW);
-    doc.setFontSize(8.5);
-    doc.setTextColor(...C.body);
-    const lines = doc.splitTextToSize(data.description.trim(), pageW - M * 2);
-    doc.text(lines, M, y);
-    y += lines.length * 5;
+  y += 3;
+
+  // ════════════════════════════════════════════════════════════════════════
+  // SAFETY STRIP
+  // ════════════════════════════════════════════════════════════════════════
+  checkSpace(14);
+  doc.setFillColor(255, 245, 225);
+  doc.setDrawColor(...GOLD);
+  doc.setLineWidth(0.4);
+  doc.roundedRect(M, y, CW, 10, 2, 2, "FD");
+  doc.setFontSize(7.5);
+  doc.setTextColor(...GOLD);
+  doc.setFont("helvetica", "bold");
+  doc.text("SAFETY", M + 4, y + 6.5);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(140, 105, 35);
+  doc.text("Always add lye TO water. Wear gloves & goggles. Keep children and pets away. Cure CP soap 4–6 weeks.", M + 22, y + 6.5);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // FOOTER — all pages
+  // ════════════════════════════════════════════════════════════════════════
+  const pages = doc.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    // Bottom gold line
+    doc.setFillColor(...GOLD);
+    doc.rect(0, H - 3, W, 3, "F");
+    // Footer text
+    doc.setFontSize(7);
+    doc.setTextColor(...MUTED);
+    doc.setFont("helvetica", "normal");
+    doc.text("Generated by SoapCalcAI  ·  Handle lye with care", M, H - 6);
+    doc.text(`${p}/${pages}`, W - M, H - 6, { align: "right" });
   }
 
-  // ── Footer on last page ────────────────────────────────────────────────────
-  doc.setFontSize(7.5);
-  doc.setTextColor(...C.muted);
-  doc.setFont("helvetica", "normal");
-  doc.text("Generated by SoapCalcAI · Handle lye with care · soapcalcai.com", M, pageH - 7);
-  doc.text(`Page ${doc.getNumberOfPages()}`, pageW - M, pageH - 7, { align: "right" });
-
-  // Gold top line on last page
-  doc.setFillColor(...C.accent);
-  doc.rect(0, 0, pageW, 0.7, "F");
-
-  // ── Save ──────────────────────────────────────────────────────────────────
-  const filename = `${data.name.replace(/[^a-z0-9]/gi,"_").toLowerCase()}_recipe.pdf`;
+  const filename = `${data.name.replace(/[^a-z0-9]/gi, "_").toLowerCase()}_recipe.pdf`;
   doc.save(filename);
 }

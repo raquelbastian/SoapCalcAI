@@ -19,6 +19,10 @@ interface SaveRecipePayload {
   scores: Record<string, number>;
   additives: { name: string; amount: number; unit: string; addAt: string; naohFactor?: number }[];
   fragrances: { name: string; amount: number; mode: string }[];
+  fragPct?: number;
+  fragMode?: string;
+  fragWeight?: number;
+  customLiquids: { name: string; pct: number }[];
   notes: string;
   aiGenerated: boolean;
 }

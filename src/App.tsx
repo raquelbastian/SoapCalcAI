@@ -2,6 +2,7 @@ import { useState, FC } from "react";
 import { useAuth } from "./useAuth";
 import AuthPage from "./AuthPage";
 import SoapCalcAI from "./SoapCalcAI";
+import type { ThemeMode } from "./SoapCalcAI";
 import PricingPage from "./PricingPage";
 import RecipesPage from "./RecipesPage";
 import type { Recipe } from "./RecipesPage";
@@ -26,6 +27,7 @@ export default function App(): JSX.Element {
   const auth = useAuth();
   const [page, setPage]               = useState<Page>("calculator");
   const [loadedRecipe, setLoadedRecipe] = useState<Recipe | null>(null);
+  const [theme, setTheme]             = useState<ThemeMode>("light");
 
   if (auth.loading)          return <LoadingScreen />;
   if (!auth.isAuthenticated) return <AuthPage auth={auth} />;
@@ -36,13 +38,13 @@ export default function App(): JSX.Element {
   );
 
   if (page === "recipes")  return (
-    <RecipesPage authToken={auth.token!} currentUser={auth.user!}
+    <RecipesPage authToken={auth.token!} currentUser={auth.user!} theme={theme}
       onBack={() => setPage("calculator")}
       onLoadRecipe={(r) => { setLoadedRecipe(r); setPage("calculator"); }} />
   );
 
   if (page === "batches")  return (
-    <BatchPage authToken={auth.token!} currentUser={auth.user!}
+    <BatchPage authToken={auth.token!} currentUser={auth.user!} theme={theme}
       onBack={() => setPage("calculator")} />
   );
 
@@ -56,6 +58,8 @@ export default function App(): JSX.Element {
       onViewBatches={() => setPage("batches")}
       loadedRecipe={loadedRecipe}
       onRecipeLoaded={() => setLoadedRecipe(null)}
+      theme={theme}
+      onThemeChange={setTheme}
     />
   );
 }

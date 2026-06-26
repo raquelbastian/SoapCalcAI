@@ -46,6 +46,10 @@ interface RecipeDoc {
   };
   additives: { name: string; amount: number; unit: string; addAt: string }[];
   fragrances: { name: string; amount: number; mode: string }[];
+  fragPct: number;
+  fragMode: string;
+  fragWeight: number;
+  customLiquids: { name: string; pct: number }[];
   notes: string;
   visibility: "public" | "private";
   aiGenerated: boolean;
@@ -144,7 +148,7 @@ async function checkAndIncrementAI(userId: string, plan: "free" | "premium"): Pr
 
 // ── App ───────────────────────────────────────────────────────────────────────
 const app = express();
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({ origin: "http://localhost:5174" }));
 app.use(express.json({ limit: "2mb" }));
 
 // ── Auth routes ───────────────────────────────────────────────────────────────
@@ -277,6 +281,10 @@ app.post("/recipes", auth, async (req, res): Promise<void> => {
       scores:      body.scores ?? {},
       additives:   body.additives ?? [],
       fragrances:  Array.isArray(body.fragrances) ? body.fragrances : [],
+      fragPct:     body.fragPct ?? 3,
+      fragMode:    body.fragMode ?? "oil_pct",
+      fragWeight:  body.fragWeight ?? 0,
+      customLiquids: Array.isArray(body.customLiquids) ? body.customLiquids : [],
       notes:       body.notes?.trim() ?? "",
       visibility:  body.visibility === "public" ? "public" : "private",
       aiGenerated: body.aiGenerated ?? false,
@@ -301,7 +309,7 @@ app.put("/recipes/:id", auth, async (req, res): Promise<void> => {
     if (doc.userId.toString() !== req.user!.userId) { res.status(403).json({ error: "Not your recipe." }); return; }
 
     const allowed = ["name","description","soapType","batchGrams","oils","superfat","naohWeight",
-                     "waterAmount","lyePurity","scores","additives","fragrances","notes","visibility","tags","updatedAt"];
+                     "waterAmount","lyePurity","scores","additives","fragrances","fragPct","fragMode","fragWeight","customLiquids","notes","visibility","tags","updatedAt"];
     const updates: any = { updatedAt: new Date() };
     for (const k of allowed) if (req.body[k] !== undefined) updates[k] = req.body[k];
 
@@ -344,6 +352,21 @@ app.post("/api/messages", auth, async (req, res): Promise<void> => {
   try {
     const { model, max_tokens, system, messages } = req.body;
     const response = await anthropic.messages.create({ model, max_tokens, system, messages });
+    res.json(response);
+  } catch (err: any) {
+    res.status(500).json({ error: { message: err.message } });
+  }
+});
+
+// ── AI analyze (blend deep dive — free, not counted) ─────────────────────────
+app.post("/api/analyze", auth, async (req, res): Promise<void> => {
+  try {
+    const { model, max_tokens, messages } = req.body;
+    const response = await anthropic.messages.create({
+      model: model ?? "claude-haiku-4-5-20251001",
+      max_tokens: max_tokens ?? 300,
+      messages,
+    });
     res.json(response);
   } catch (err: any) {
     res.status(500).json({ error: { message: err.message } });
